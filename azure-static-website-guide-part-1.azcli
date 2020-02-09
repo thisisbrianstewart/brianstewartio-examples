@@ -1,0 +1,48 @@
+
+# top level vars and resourceGroup
+resourceGroup="rg-test-001"
+location="centralus"
+az group create --name $resourceGroup --location $location
+
+
+# dns
+domain="myfakedomain.com"
+az network dns zone create --resource-group $resourceGroup --name $domain
+az network dns record-set txt create --resource-group $resourceGroup --ttl 30 --zone-name $domain --name example
+az network dns record-set txt add-record --resource-group $resourceGroup --zone-name $domain --record-set-name example --value hello=world
+az network dns record-set ns show --resource-group $resourceGroup --zone-name $domain --name @
+az network dns record-set list --resource-group $resourceGroup --zone-name $domain
+
+
+# storage
+storageAccount="stmyfakedomainweb"
+storageAccountKind="StorageV2"
+storageAccountSku="Standard_GRS"
+storageAccount404Document="error.html"
+storageAccountIndexDocument="index.html"
+
+az storage account create --resource-group $resourceGroup --location $location --name $storageAccount --kind $storageAccountKind --sku $storageAccountSku --https-only true 
+az storage blob service-properties update --account-name $storageAccount --static-website --404-document $storageAccount404Document --index-document $storageAccountIndexDocument
+
+
+# deploy 
+npm run build
+az storage blob upload-batch --account-name $storageAccount --destination '$web' --source build
+
+
+# cdn
+cdnProfileName="cdnmyfakedomain"
+cdnEndpointName="cdnmyfakedomainweb"
+cdnSku="Standard_Microsoft"
+cdnCustomDomain="myfakedomaincom"
+cdnverify="cdnverify"
+origin=$(az storage account show -g $resourceGroup -n $storageAccount --query "primaryEndpoints.web" --output tsv | awk -F/ '{print $3}')
+cdnOrigin=$(az cdn endpoint show -g $resourceGroup --profile-name $cdnProfileName --name $cdnEndpointName --query hostName --output tsv)
+
+az cdn profile create -g $resourceGroup -n $cdnProfileName --sku $cdnSku
+az cdn endpoint create -g $resourceGroup -n $cdnEndpointName --profile-name $cdnProfileName --origin $origin --origin-host-header $origin
+
+az network dns record-set cname create --resource-group $resourceGroup --zone-name $domain --name $cdnverify
+az network dns record-set cname set-record --resource-group $resourceGroup --record-set-name $cdnverify --zone-name $domain --cname $cdnverify.$cdnOrigin
+az cdn custom-domain create --resource-group $resourceGroup --endpoint-name $cdnEndpointName --profile-name $cdnProfileName --name $cdnCustomDomain --hostname $domain
+az cdn custom-domain enable-https --resource-group $resourceGroup --endpoint-name $cdnProfileName --profile-name $cdnProfileName --name $cdnCustomDomain --custom-domain-https-parameters '{"certificateSource":"AzureKeyVault", "protocolType":"ServerNameIndication", "certificateSourceParameters":{"resourceGroupName": "rg-test-001", "secretName": "myfakedomaincomsslcert", "vaultName": "testvault"}}'
